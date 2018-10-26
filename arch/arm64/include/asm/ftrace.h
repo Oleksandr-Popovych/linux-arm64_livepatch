@@ -16,6 +16,19 @@
 #define MCOUNT_ADDR		((unsigned long)_mcount)
 #define MCOUNT_INSN_SIZE	AARCH64_INSN_SIZE
 
+/*
+ * DYNAMIC_FTRACE_WITH_REGS is implemented by adding 2 NOPs at the beginning
+ * of each function, with the second NOP actually calling ftrace. In contrary
+ * to a classic _mcount call, the call instruction to be modified is thus
+ * the second one, and not the only one.
+ */
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_REGS
+#define ARCH_SUPPORTS_FTRACE_OPS 1
+#define REC_IP_BRANCH_OFFSET AARCH64_INSN_SIZE
+#else
+#define REC_IP_BRANCH_OFFSET 0
+#endif
+
 #ifndef __ASSEMBLY__
 #include <linux/compat.h>
 

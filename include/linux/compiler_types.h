@@ -231,7 +231,11 @@ struct ftrace_likely_data {
 #if defined(CC_USING_HOTPATCH) && !defined(__CHECKER__)
 #define notrace			__attribute__((hotpatch(0, 0)))
 #else
+#if defined(CONFIG_ARM64) && defined(CONFIG_DYNAMIC_FTRACE_WITH_REGS)
+#define notrace __attribute__((patchable_function_entry(0)))
+#else
 #define notrace			__attribute__((no_instrument_function))
+#endif
 #endif
 
 /*

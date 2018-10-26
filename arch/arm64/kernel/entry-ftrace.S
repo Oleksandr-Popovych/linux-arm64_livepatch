@@ -13,6 +13,8 @@
 #include <asm/assembler.h>
 #include <asm/ftrace.h>
 #include <asm/insn.h>
+#include <asm/asm-offsets.h>
+#include <asm/assembler.h>
 
 /*
  * Gcc with -pg will put the following code in the beginning of each function:
@@ -122,6 +124,7 @@ skip_ftrace_call:			// }
 ENDPROC(_mcount)
 
 #else /* CONFIG_DYNAMIC_FTRACE */
+#ifndef CONFIG_DYNAMIC_FTRACE_WITH_REGS
 /*
  * _mcount() is used to build the kernel with -pg option, but all the branch
  * instructions to _mcount() are replaced to NOP initially at kernel start up,
@@ -161,6 +164,114 @@ ftrace_graph_call:			// ftrace_graph_caller();
 
 	mcount_exit
 ENDPROC(ftrace_caller)
+#else /* CONFIG_DYNAMIC_FTRACE_WITH_REGS */
+
+/*
+ * Since no -pg or similar compiler flag is used, there should really be
+ * no reference to _mcount; so do not define one. Only some value for
+ * MCOUNT_ADDR is needed for comparison. Let it point here to have some
+ * sort of magic value that can be recognised when debugging.
+ */
+	.global _mcount
+_mcount:
+	ret	/* make it differ from regs caller */
+
+ENTRY(ftrace_regs_caller)
+	/* callee's preliminary stack frame: */
+	stp	fp, x9, [sp, #-16]!
+	mov	fp, sp
+
+	/* our stack frame: */
+	stp	fp, lr, [sp, #-S_FRAME_SIZE]!
+	add	x9, sp, #16	/* offset to pt_regs */
+
+	stp	x10, x11, [x9, #S_X10]
+	stp	x12, x13, [x9, #S_X12]
+	stp	x14, x15, [x9, #S_X14]
+	stp	x16, x17, [x9, #S_X16]
+	stp	x18, x19, [x9, #S_X18]
+	stp	x20, x21, [x9, #S_X20]
+	stp	x22, x23, [x9, #S_X22]
+	stp	x24, x25, [x9, #S_X24]
+	stp	x26, x27, [x9, #S_X26]
+
+	b	ftrace_common
+ENDPROC(ftrace_regs_caller)
+
+ENTRY(ftrace_caller)
+	/* callee's preliminary stack frame: */
+	stp	fp, x9, [sp, #-16]!
+	mov	fp, sp
+
+	/* our stack frame: */
+	stp	fp, lr, [sp, #-S_FRAME_SIZE]!
+	add	x9, sp, #16	/* offset to pt_regs */
+
+ftrace_common:
+	/*
+	 * At this point we have 2 new stack frames, and x9 pointing
+	 * at a pt_regs which we can populate as needed.
+	 */
+
+	/* save function arguments */
+	stp	x0, x1, [x9]
+	stp	x2, x3, [x9, #S_X2]
+	stp	x4, x5, [x9, #S_X4]
+	stp	x6, x7, [x9, #S_X6]
+	stp	x8, x9, [x9, #S_X8]
+
+	ldr	x0, [fp]
+	stp	x28, x0, [x9, #S_X28]	/* FP in pt_regs + "our" x28 */
+
+	/* The program counter just after the ftrace call site */
+	str	lr, [x9, #S_PC]
+	/* The stack pointer as it was on ftrace_caller entry... */
+	add	x28, fp, #16
+	str	x28, [x9, #S_SP]
+	/* The link Register at callee entry */
+	ldr	x28, [fp, 8]
+	str	x28, [x9, #S_LR]	/* to pt_regs.r[30] */
+
+	ldr_l	x2, function_trace_op, x0
+	ldr	x1, [fp, #8]
+	sub	x0, lr, #8	/* function entry == IP */
+	mov	x3, x9		/* pt_regs are @x9 */
+
+	mov	fp, sp
+
+	.global ftrace_call
+ftrace_call:
+
+	bl	ftrace_stub
+
+#ifdef CONFIG_FUNCTION_GRAPH_TRACER
+	.global ftrace_graph_call
+ftrace_graph_call:			// ftrace_graph_caller();
+	nop				// If enabled, this will be replaced
+					// "b ftrace_graph_caller"
+#endif
+
+ftrace_common_return:
+	add	x9, sp, #16	/* advance to pt_regs for restore */
+
+	ldp	x0, x1, [x9]
+	ldp	x2, x3, [x9, #S_X2]
+	ldp	x4, x5, [x9, #S_X4]
+	ldp	x6, x7, [x9, #S_X6]
+	ldp	x8, x9, [x9, #S_X8]
+
+	ldp	x28, fp, [x9, #S_X28]
+
+	ldr	lr, [x9, #S_LR]
+	ldr	x9, [x9, #S_PC]
+	/* clean up both frames, ours and callee preliminary */
+	add	sp, sp, #S_FRAME_SIZE + 16
+
+	ret	x9
+
+ENDPROC(ftrace_caller)
+
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_REGS */
 #endif /* CONFIG_DYNAMIC_FTRACE */
 
 ENTRY(ftrace_stub)
@@ -196,12 +307,21 @@ ENDPROC(ftrace_stub)
  * and run return_to_handler() later on its exit.
  */
 ENTRY(ftrace_graph_caller)
+#ifndef CONFIG_DYNAMIC_FTRACE_WITH_REGS
 	mcount_get_lr_addr	  x0	//     pointer to function's saved lr
 	mcount_get_pc		  x1	//     function's pc
 	mcount_get_parent_fp	  x2	//     parent's fp
 	bl	prepare_ftrace_return	// prepare_ftrace_return(&lr, pc, fp)
 
 	mcount_exit
+#else
+	add	x9, sp, #16	/* advance to pt_regs to gather args */
+	add	x0, x9, #S_LR		   /* &lr */
+	ldr	x1, [x9, #S_PC]		   /* pc */
+	ldr	x2, [x9, #S_STACKFRAME]	   /* fp */
+	bl	prepare_ftrace_return
+	b	ftrace_common_return
+#endif
 ENDPROC(ftrace_graph_caller)
 
 /*
