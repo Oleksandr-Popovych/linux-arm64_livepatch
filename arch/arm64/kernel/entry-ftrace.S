@@ -225,12 +225,17 @@ ftrace_common:
 
 	/* The program counter just after the ftrace call site */
 	str	lr, [x9, #S_PC]
+
 	/* The stack pointer as it was on ftrace_caller entry... */
 	add	x28, fp, #16
 	str	x28, [x9, #S_SP]
 	/* The link Register at callee entry */
 	ldr	x28, [fp, 8]
 	str	x28, [x9, #S_LR]	/* to pt_regs.r[30] */
+
+#if defined(CONFIG_LIVEPATCH) && defined(CONFIG_FUNCTION_GRAPH_TRACER)
+	mov	x28, lr		/* remember old return address */
+#endif
 
 	ldr_l	x2, function_trace_op, x0
 	ldr	x1, [fp, #8]
@@ -243,6 +248,17 @@ ftrace_common:
 ftrace_call:
 
 	bl	ftrace_stub
+
+#if defined(CONFIG_LIVEPATCH) && defined(CONFIG_FUNCTION_GRAPH_TRACER)
+	/* Is the trace function a live patcher an has messed with
+	 * the return address?
+	 */
+	add	x9, sp, #16	/* advance to pt_regs for restore */
+	ldr	x0, [x9, #S_PC]
+	cmp	x0, x28		/* compare with the value we remembered */
+	/* to not call graph tracer's "call" mechanism twice! */
+	b.ne	ftrace_common_return
+#endif
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	.global ftrace_graph_call
